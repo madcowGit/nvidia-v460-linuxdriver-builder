@@ -63,20 +63,6 @@ jobs:
             done
           fi
 
-      - name: Prepare Header Tree
-        run: |
-          DRIVERVERSION="470.256.02"
-          DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
-          cd "${DRIVERNAME}"
-
-          # Flatten all header files into kernel/ and kernel/nvidia/
-          find . -name "*.h" -exec cp -f {} kernel/ \; 2>/dev/null || true
-          find . -name "*.h" -exec cp -f {} kernel/nvidia/ \; 2>/dev/null || true
-          if [ -d "common/inc" ]; then
-            cp -rf common/inc/* kernel/ 2>/dev/null || true
-            cp -rf common/inc/* kernel/nvidia/ 2>/dev/null || true
-          fi
-
       - name: Compile Kernel Module with Auto-Patching
         run: |
           DRIVERVERSION="470.256.02"
@@ -92,9 +78,8 @@ jobs:
           while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
             echo "--- Build Attempt $ATTEMPT / $MAX_ATTEMPTS ---"
             
-            BUILD_LOG=$(make -j$(nproc) modules \
-              KERNEL_UNAME=$(uname -r) \
-              EXTRA_CFLAGS="-I${PWD} -I${PWD}/nvidia -I${PWD}/nvidia-modeset -I${PWD}/../common/inc" 2>&1) && BUILD_EXIT=$? || BUILD_EXIT=$?
+            # Execute module build clean without overriding Kbuild internal CFLAGS
+            BUILD_LOG=$(make -j$(nproc) modules KERNEL_UNAME=$(uname -r) 2>&1) && BUILD_EXIT=$? || BUILD_EXIT=$?
 
             if [ $BUILD_EXIT -eq 0 ]; then
               echo "Build succeeded!"
