@@ -87,7 +87,7 @@ jobs:
             # Pattern 1: 'struct drm_driver' has no member named 'date'
             if echo "$BUILD_LOG" | grep -q "has no member named 'date'"; then
               echo "Fixing: Commenting out removed 'date' member in drm struct..."
-              grep -rl "\.date[[:space:]]*=" . | xargs -r sed -i 's/\(\s*\.date\s*=.*\)/\/\//'
+              grep -rl "\.date[[:space:]]*=" . | xargs -r sed -i 's/\(\s*\.date\s*=.*\)/\/\/\1/'
               FIXED=1
             fi
 
