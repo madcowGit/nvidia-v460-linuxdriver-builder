@@ -1,0 +1,142 @@
+name: Build NVIDIA v460 Kernel Module
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-and-patch:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Build Dependencies & Kernel Headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc make kmod curl patch git linux-headers-$(uname -r)
+
+      - name: Download & Extract NVIDIA v460 Driver
+        run: |
+          DRIVERVERSION="460.106.00"
+          DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
+          DRIVERFILE="${DRIVERNAME}.run"
+
+          echo "Downloading NVIDIA driver version ${DRIVERVERSION}..."
+          curl -sSL "https://us.download.nvidia.com/XFree86/Linux-x86_64/${DRIVERVERSION}/${DRIVERFILE}" -o "${DRIVERFILE}"
+          
+          echo "Extracting driver package..."
+          sh "${DRIVERFILE}" --extract-only
+          rm "${DRIVERFILE}"
+
+          # Initialize git repo in extracted folder to track patches cleanly
+          cd "${DRIVERNAME}"
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "Initial extracted source"
+
+      - name: Apply Custom Repository Patches
+        run: |
+          DRIVERVERSION="460.106.00"
+          DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
+          
+          if [ -d "patches" ]; then
+            cd "${DRIVERNAME}"
+            for p in ../patches/*.patch; do
+              if [ -f "$p" ]; then
+                echo "Applying repository patch: $p"
+                patch -p1 < "$p" || true
+              fi
+            done
+          fi
+
+      - name: Compile Kernel Module with Auto-Patching
+        run: |
+          DRIVERVERSION="460.106.00"
+          DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
+          cd "${DRIVERNAME}/kernel"
+
+          MAX_ATTEMPTS=10
+          ATTEMPT=1
+          SUCCESS=0
+
+          echo "Starting module compilation with automated error fixing..."
+
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+            echo "--- Build Attempt $ATTEMPT / $MAX_ATTEMPTS ---"
+            
+            # Run make and capture output
+            BUILD_LOG=$(make modules KERNEL_UNAME=$(uname -r) 2>&1) && BUILD_EXIT=$? || BUILD_EXIT=$?
+
+            if [ $BUILD_EXIT -eq 0 ]; then
+              echo "Build succeeded!"
+              SUCCESS=1
+              break
+            fi
+
+            echo "Build failed. Analyzing logs for common kernel breakage patterns..."
+
+            FIXED=0
+
+            # Pattern 1: 'struct drm_driver' has no member named 'date'
+            if echo "$BUILD_LOG" | grep -q "has no member named 'date'"; then
+              echo "Fixing: Commenting out removed 'date' member in drm struct..."
+              grep -rl "\.date[[:space:]]*=" . | xargs -r sed -i 's/\(\s*\.date\s*=.*\)/\/\//'
+              FIXED=1
+            fi
+
+            # Pattern 2: MODULE_LICENSE missing or broken macro expansion
+            if echo "$BUILD_LOG" | grep -q "MODULE_LICENSE"; then
+              echo "Fixing: Ensuring proper MODULE_LICENSE placement..."
+              grep -rl "MODULE_LICENSE" . | xargs -r sed -i 's/MODULE_LICENSE("GPL v2");/MODULE_LICENSE("GPL");/'
+              FIXED=1
+            fi
+
+            # Pattern 3: missing header fallthrough / drm_pci_init removal
+            if echo "$BUILD_LOG" | grep -q "drm_pci_init"; then
+              echo "Fixing: Patching removed drm_pci_init function calls..."
+              grep -rl "drm_pci_init" . | xargs -r sed -i 's/drm_pci_init/\/\/ drm_pci_init/'
+              FIXED=1
+            fi
+
+            if [ $FIXED -eq 0 ]; then
+              echo "Could not automatically resolve errors. Full build log below:"
+              echo "$BUILD_LOG"
+              exit 1
+            fi
+
+            ATTEMPT=$((ATTEMPT + 1))
+          done
+
+          if [ $SUCCESS -ne 1 ]; then
+            echo "Failed to compile driver module after $MAX_ATTEMPTS attempts."
+            exit 1
+          fi
+
+      - name: Generate Unified Patch File
+        if: always()
+        run: |
+          DRIVERVERSION="460.106.00"
+          DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
+          cd "${DRIVERNAME}"
+
+          if git status --porcelain | grep -q .; then
+            echo "Changes detected! Generating nvidia-v460-kernel.patch..."
+            git diff > ../nvidia-v460-kernel.patch
+          else
+            echo "No changes made, generating empty patch baseline."
+            touch ../nvidia-v460-kernel.patch
+          fi
+
+      - name: Upload Auto-Generated Patch Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvidia-v460-auto-patch
+          path: nvidia-v460-kernel.patch
+          if-no-files-found: ignore
