@@ -1,0 +1,19 @@
+# Build & Driver Artifacts
+NVIDIA-Linux-x86_64-*/
+*.run
+*.patch
+*.o
+*.ko
+*.mod.c
+*.order
+*.symvers
+
+# Logs & Temporary Files
+*.log
+/tmp/
+
+# OS / Editor Files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
