@@ -63,16 +63,6 @@ jobs:
             done
           fi
 
-      - name: Link Shared Headers
-        run: |
-          DRIVERVERSION="470.256.02"
-          DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
-          cd "${DRIVERNAME}"
-
-          # Symlink top-level and common headers directly into kernel module folders
-          cp -rs "${PWD}/common/inc/"* "${PWD}/kernel/nvidia/" 2>/dev/null || true
-          cp -rs "${PWD}/common/inc/"* "${PWD}/kernel/" 2>/dev/null || true
-
       - name: Compile Kernel Module with Auto-Patching
         run: |
           DRIVERVERSION="470.256.02"
@@ -88,7 +78,8 @@ jobs:
           while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
             echo "--- Build Attempt $ATTEMPT / $MAX_ATTEMPTS ---"
             
-            BUILD_LOG=$(make -j$(nproc) modules SYSSRC=/lib/modules/$(uname -r)/build KERNEL_UNAME=$(uname -r) 2>&1) && BUILD_EXIT=$? || BUILD_EXIT=$?
+            BUILD_LOG=$(make -j$(nproc) modules KERNEL_UNAME=$(uname -r) \
+              ccflags-y="-I${PWD} -I${PWD}/nvidia -I${PWD}/common/inc -I${PWD}/../common/inc" 2>&1) && BUILD_EXIT=$? || BUILD_EXIT=$?
 
             if [ $BUILD_EXIT -eq 0 ]; then
               echo "Build succeeded!"
