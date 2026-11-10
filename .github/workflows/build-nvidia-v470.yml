@@ -41,7 +41,6 @@ jobs:
           sh "${DRIVERFILE}" --extract-only
           rm "${DRIVERFILE}"
 
-          # Initialize git repo in extracted folder to track patches cleanly
           cd "${DRIVERNAME}"
           git init
           git config user.name "github-actions[bot]"
@@ -64,19 +63,23 @@ jobs:
             done
           fi
 
+      - name: Prepare Header Symlinks and Build Environment
+        run: |
+          DRIVERVERSION="470.256.02"
+          DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
+          cd "${DRIVERNAME}"
+
+          # Symlink or copy missing top-level headers directly into kernel/ folder
+          if [ -d "common/inc" ]; then
+            cp -rn common/inc/* kernel/ 2>/dev/null || true
+          fi
+          find . -maxdepth 2 -name "*.h" -exec cp -rn {} kernel/ \; 2>/dev/null || true
+
       - name: Compile Kernel Module with Auto-Patching
         run: |
           DRIVERVERSION="470.256.02"
           DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
-          
-          # Copy common headers and top-level helper files into kernel tree
-          cd "${DRIVERNAME}"
-          if [ -d "common/inc" ]; then
-            cp -r common/inc/* kernel/
-          fi
-          find . -maxdepth 2 -name "*.h" -exec cp -t kernel/ {} + 2>/dev/null || true
-
-          cd kernel/
+          cd "${DRIVERNAME}/kernel"
 
           MAX_ATTEMPTS=10
           ATTEMPT=1
@@ -87,8 +90,8 @@ jobs:
           while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
             echo "--- Build Attempt $ATTEMPT / $MAX_ATTEMPTS ---"
             
-            # Run make modules with header path inclusions
-            BUILD_LOG=$(make modules KBUILD_EXTRA_SYMBOLS="" EXTRA_CFLAGS="-I$(pwd) -I$(pwd)/common/inc" KERNEL_UNAME=$(uname -r) 2>&1) && BUILD_EXIT=$? || BUILD_EXIT=$?
+            # Execute kernel build passing inclusion paths for header lookup
+            BUILD_LOG=$(make -j$(nproc) modules KBUILD_EXTRA_SYMBOLS="" EXTRA_CFLAGS="-I${PWD} -I${PWD}/../common/inc" KERNEL_UNAME=$(uname -r) 2>&1) && BUILD_EXIT=$? || BUILD_EXIT=$?
 
             if [ $BUILD_EXIT -eq 0 ]; then
               echo "Build succeeded!"
@@ -100,21 +103,21 @@ jobs:
 
             FIXED=0
 
-            # Pattern 1: 'struct drm_driver' has no member named 'date'
+            # Pattern 1: Missing member 'date' in struct drm_driver
             if echo "$BUILD_LOG" | grep -q "has no member named 'date'"; then
               echo "Fixing: Commenting out removed 'date' member in drm struct..."
               grep -rl "\.date[[:space:]]*=" . | xargs -r sed -i 's/\(\s*\.date\s*=.*\)/\/\/\1/'
               FIXED=1
             fi
 
-            # Pattern 2: MODULE_LICENSE missing or broken macro expansion
+            # Pattern 2: MODULE_LICENSE macro adjustments
             if echo "$BUILD_LOG" | grep -q "MODULE_LICENSE"; then
               echo "Fixing: Ensuring proper MODULE_LICENSE placement..."
               grep -rl "MODULE_LICENSE" . | xargs -r sed -i 's/MODULE_LICENSE("GPL v2");/MODULE_LICENSE("GPL");/'
               FIXED=1
             fi
 
-            # Pattern 3: missing header fallthrough / drm_pci_init removal
+            # Pattern 3: drm_pci_init removal in modern DRM subsystem
             if echo "$BUILD_LOG" | grep -q "drm_pci_init"; then
               echo "Fixing: Patching removed drm_pci_init function calls..."
               grep -rl "drm_pci_init" . | xargs -r sed -i 's/drm_pci_init/\/\/ drm_pci_init/'
