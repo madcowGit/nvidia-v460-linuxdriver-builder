@@ -1,4 +1,4 @@
-name: Build NVIDIA v460 Kernel Module
+name: Build NVIDIA v470 Kernel Module
 
 on:
   push:
@@ -20,14 +20,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential gcc make kmod curl patch git linux-headers-$(uname -r)
 
-      - name: Download & Extract NVIDIA v460 Driver
+      - name: Download & Extract NVIDIA v470 Driver
         run: |
-          DRIVERVERSION="460.106.00"
+          DRIVERVERSION="470.256.02"
           DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
           DRIVERFILE="${DRIVERNAME}.run"
 
           echo "Downloading NVIDIA driver version ${DRIVERVERSION}..."
-          curl -sSL "https://us.download.nvidia.com/XFree86/Linux-x86_64/${DRIVERVERSION}/${DRIVERFILE}" -o "${DRIVERFILE}"
+          curl -f -sSL "https://us.download.nvidia.com/XFree86/Linux-x86_64/${DRIVERVERSION}/${DRIVERFILE}" -o "${DRIVERFILE}"
           
           echo "Extracting driver package..."
           sh "${DRIVERFILE}" --extract-only
@@ -43,7 +43,7 @@ jobs:
 
       - name: Apply Custom Repository Patches
         run: |
-          DRIVERVERSION="460.106.00"
+          DRIVERVERSION="470.256.02"
           DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
           
           if [ -d "patches" ]; then
@@ -58,7 +58,7 @@ jobs:
 
       - name: Compile Kernel Module with Auto-Patching
         run: |
-          DRIVERVERSION="460.106.00"
+          DRIVERVERSION="470.256.02"
           DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
           cd "${DRIVERNAME}/kernel"
 
@@ -122,21 +122,21 @@ jobs:
       - name: Generate Unified Patch File
         if: always()
         run: |
-          DRIVERVERSION="460.106.00"
+          DRIVERVERSION="470.256.02"
           DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
           cd "${DRIVERNAME}"
 
           if git status --porcelain | grep -q .; then
-            echo "Changes detected! Generating nvidia-v460-kernel.patch..."
-            git diff > ../nvidia-v460-kernel.patch
+            echo "Changes detected! Generating nvidia-v470-kernel.patch..."
+            git diff > ../nvidia-v470-kernel.patch
           else
             echo "No changes made, generating empty patch baseline."
-            touch ../nvidia-v460-kernel.patch
+            touch ../nvidia-v470-kernel.patch
           fi
 
       - name: Upload Auto-Generated Patch Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nvidia-v460-auto-patch
-          path: nvidia-v460-kernel.patch
+          name: nvidia-v470-auto-patch
+          path: nvidia-v470-kernel.patch
           if-no-files-found: ignore
