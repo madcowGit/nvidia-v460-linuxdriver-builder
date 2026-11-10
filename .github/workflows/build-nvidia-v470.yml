@@ -67,13 +67,16 @@ jobs:
         run: |
           DRIVERVERSION="470.256.02"
           DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
-          cd "${DRIVERNAME}"
+          cd "${DRIVERNAME}/kernel"
 
-          # Recursively copy common headers and root headers into kernel directory
-          if [ -d "common/inc" ]; then
-            cp -r common/inc/* kernel/
+          # Copy headers into root kernel directory and nvidia/ subfolder
+          if [ -d "../common/inc" ]; then
+            cp -rn ../common/inc/* . 2>/dev/null || true
+            cp -rn ../common/inc/* nvidia/ 2>/dev/null || true
           fi
-          find . -maxdepth 2 -name "*.h" -exec cp -r {} kernel/ \; 2>/dev/null || true
+          
+          # Distribute all header files across submodules
+          find . -maxdepth 2 -name "*.h" -exec cp -rn {} nvidia/ \; 2>/dev/null || true
 
       - name: Compile Kernel Module with Auto-Patching
         run: |
@@ -90,8 +93,11 @@ jobs:
           while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
             echo "--- Build Attempt $ATTEMPT / $MAX_ATTEMPTS ---"
             
-            # Export ccflags-y so Kbuild passes header search paths to all sub-makes
-            BUILD_LOG=$(export ccflags-y="-I${PWD} -I${PWD}/common/inc -I${PWD}/../common/inc"; make -j$(nproc) modules KERNEL_UNAME=$(uname -r) 2>&1) && BUILD_EXIT=$? || BUILD_EXIT=$?
+            # Pass header paths directly via NV_EXTRA_INCLUDES and EXTRA_CFLAGS
+            BUILD_LOG=$(make -j$(nproc) modules \
+              KERNEL_UNAME=$(uname -r) \
+              NV_EXTRA_INCLUDES="-I${PWD} -I${PWD}/nvidia -I${PWD}/../common/inc" \
+              EXTRA_CFLAGS="-I${PWD} -I${PWD}/nvidia -I${PWD}/../common/inc" 2>&1) && BUILD_EXIT=$? || BUILD_EXIT=$?
 
             if [ $BUILD_EXIT -eq 0 ]; then
               echo "Build succeeded!"
