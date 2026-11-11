@@ -21,7 +21,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Install Build Dependencies & Kernel Headers
         run: |
@@ -63,20 +63,20 @@ jobs:
             done
           fi
 
-      - name: Setup Header Links
+      - name: Setup Include Paths and Header Links
         run: |
           DRIVERVERSION="470.256.02"
           DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
           cd "${DRIVERNAME}"
 
-          # Ensure headers in common/inc and subdirectories are available everywhere in kernel/
+          # Copy top-level and common headers directly into build targets
           if [ -d "common/inc" ]; then
             cp -r common/inc/* kernel/
             cp -r common/inc/* kernel/nvidia/
           fi
           
-          # Copy remaining header files into kernel/nvidia
-          find . -name "*.h" -exec cp {} kernel/nvidia/ \; 2>/dev/null || true
+          # Flatten nested internal headers into kernel/nvidia
+          find . -maxdepth 2 -name "*.h" -exec cp -r {} kernel/nvidia/ \; 2>/dev/null || true
 
       - name: Compile Kernel Module with Auto-Patching
         run: |
@@ -93,6 +93,7 @@ jobs:
           while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
             echo "--- Build Attempt $ATTEMPT / $MAX_ATTEMPTS ---"
             
+            # Run make with KBUILD_EXTRA_SYMBOLS and clean environment
             BUILD_LOG=$(make -j$(nproc) modules KERNEL_UNAME=$(uname -r) 2>&1) && BUILD_EXIT=$? || BUILD_EXIT=$?
 
             if [ $BUILD_EXIT -eq 0 ]; then
@@ -163,7 +164,7 @@ jobs:
           fi
 
       - name: Upload Auto-Generated Patch Artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
           name: nvidia-v470-auto-patch
           path: nvidia-v470-kernel.patch
