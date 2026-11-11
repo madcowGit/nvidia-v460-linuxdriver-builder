@@ -63,6 +63,21 @@ jobs:
             done
           fi
 
+      - name: Setup Header Links
+        run: |
+          DRIVERVERSION="470.256.02"
+          DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
+          cd "${DRIVERNAME}"
+
+          # Ensure headers in common/inc and subdirectories are available everywhere in kernel/
+          if [ -d "common/inc" ]; then
+            cp -r common/inc/* kernel/
+            cp -r common/inc/* kernel/nvidia/
+          fi
+          
+          # Copy remaining header files into kernel/nvidia
+          find . -name "*.h" -exec cp {} kernel/nvidia/ \; 2>/dev/null || true
+
       - name: Compile Kernel Module with Auto-Patching
         run: |
           DRIVERVERSION="470.256.02"
@@ -78,7 +93,6 @@ jobs:
           while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
             echo "--- Build Attempt $ATTEMPT / $MAX_ATTEMPTS ---"
             
-            # Clean invocation letting Kbuild handle compiler include flags naturally
             BUILD_LOG=$(make -j$(nproc) modules KERNEL_UNAME=$(uname -r) 2>&1) && BUILD_EXIT=$? || BUILD_EXIT=$?
 
             if [ $BUILD_EXIT -eq 0 ]; then
