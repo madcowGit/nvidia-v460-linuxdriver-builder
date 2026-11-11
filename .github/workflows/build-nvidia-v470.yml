@@ -63,21 +63,16 @@ jobs:
             done
           fi
 
-      - name: Setup Header Links
+      - name: Prepare Header Includes & Kbuild Paths
         run: |
           DRIVERVERSION="470.256.02"
           DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
           cd "${DRIVERNAME}/kernel"
 
-          # Copy headers from common/inc and top-level directories into kernel tree
-          if [ -d "../common/inc" ]; then
-            cp -r ../common/inc/* .
-            cp -r ../common/inc/* nvidia/ 2>/dev/null || true
-          fi
+          # Populate Kbuild files with include directory paths so nested modules resolve all headers
+          INCLUDES="-I$(pwd) -I$(pwd)/nvidia -I$(pwd)/nvidia-modeset -I$(pwd)/../common/inc"
           
-          # Copy root level headers into build directories
-          cp -f ../*.h . 2>/dev/null || true
-          cp -f ../*.h nvidia/ 2>/dev/null || true
+          find . -name "Kbuild" -o -name "Makefile" | xargs -r sed -i "1i ccflags-y += ${INCLUDES}"
 
       - name: Compile Kernel Module with Auto-Patching
         run: |
@@ -94,9 +89,7 @@ jobs:
           while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
             echo "--- Build Attempt $ATTEMPT / $MAX_ATTEMPTS ---"
             
-            # Pass explicit includes to Kbuild via EXTRA_CFLAGS
-            BUILD_LOG=$(make -j$(nproc) modules KERNEL_UNAME=$(uname -r) \
-              EXTRA_CFLAGS="-I${PWD} -I${PWD}/nvidia -I${PWD}/../common/inc" 2>&1) && BUILD_EXIT=$? || BUILD_EXIT=$?
+            BUILD_LOG=$(make -j$(nproc) modules KERNEL_UNAME=$(uname -r) 2>&1) && BUILD_EXIT=$? || BUILD_EXIT=$?
 
             if [ $BUILD_EXIT -eq 0 ]; then
               echo "Build succeeded!"
