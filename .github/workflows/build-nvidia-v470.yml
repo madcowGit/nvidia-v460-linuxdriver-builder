@@ -15,10 +15,16 @@ on:
       - ".gitignore"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build-and-patch:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+
+    env:
+      DRIVER_VERSION: "470.256.02"
 
     steps:
       - name: Checkout repository
@@ -28,8 +34,9 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential \
             gcc \
             make \
@@ -38,7 +45,25 @@ jobs:
             patch \
             git \
             ca-certificates \
-            "linux-headers-$(uname -r)"
+            bc \
+            rsync \
+            flex \
+            bison
+
+          KERNEL_RELEASE="$(uname -r)"
+          echo "Detected kernel: ${KERNEL_RELEASE}"
+
+          if ! sudo apt-get install -y --no-install-recommends "linux-headers-${KERNEL_RELEASE}"; then
+            echo "linux-headers-${KERNEL_RELEASE} not available; falling back to linux-headers-generic" >&2
+            sudo apt-get install -y --no-install-recommends linux-headers-generic
+          fi
+
+          if [ ! -f "/lib/modules/${KERNEL_RELEASE}/build/Makefile" ]; then
+            echo "Kernel build tree missing for ${KERNEL_RELEASE}" >&2
+            ls -ld /lib/modules || true
+            ls -ld /lib/modules/${KERNEL_RELEASE} || true
+            exit 1
+          fi
 
       - name: Download and extract NVIDIA v470 driver
         shell: bash
@@ -77,6 +102,7 @@ jobs:
           DRIVER_VERSION: "470.256.02"
         run: |
           set -euxo pipefail
+
           DRIVER_NAME="NVIDIA-Linux-x86_64-${DRIVER_VERSION}"
 
           if [ -d "patches" ]; then
@@ -101,6 +127,7 @@ jobs:
           DRIVER_VERSION: "470.256.02"
         run: |
           set -euxo pipefail
+
           DRIVER_NAME="NVIDIA-Linux-x86_64-${DRIVER_VERSION}"
           cd "${DRIVER_NAME}"
 
@@ -111,9 +138,9 @@ jobs:
           fi
           echo "Using GCC builtin headers from ${GCC_INCLUDE_DIR}"
 
-          mapfile -t KBUILD_FILES < <(find kernel/ -type f \( -name "Kbuild" -o -name "Kbuild.nvidia" \) -print)
+          mapfile -t KBUILD_FILES < <(find . -type f \( -name "Kbuild" -o -name "Kbuild.nvidia" \) -print)
           if [ "${#KBUILD_FILES[@]}" -eq 0 ]; then
-            echo "No Kbuild files found under ${PWD}/kernel" >&2
+            echo "No Kbuild files found under ${PWD}" >&2
             exit 1
           fi
 
@@ -133,6 +160,7 @@ jobs:
           DRIVER_VERSION: "470.256.02"
         run: |
           set -euxo pipefail
+
           DRIVER_NAME="NVIDIA-Linux-x86_64-${DRIVER_VERSION}"
           cd "${DRIVER_NAME}/kernel"
 
@@ -169,6 +197,7 @@ jobs:
           DRIVER_VERSION: "470.256.02"
         run: |
           set -euxo pipefail
+
           DRIVER_NAME="NVIDIA-Linux-x86_64-${DRIVER_VERSION}"
 
           if [ ! -d "${DRIVER_NAME}/.git" ]; then
