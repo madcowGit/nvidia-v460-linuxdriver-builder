@@ -2,17 +2,17 @@ name: Build NVIDIA v470 Kernel Module
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
     paths-ignore:
-      - 'README.md'
-      - '*.md'
-      - '.gitignore'
+      - "README.md"
+      - "*.md"
+      - ".gitignore"
   pull_request:
-    branches: [ main, master ]
+    branches: [main, master]
     paths-ignore:
-      - 'README.md'
-      - '*.md'
-      - '.gitignore'
+      - "README.md"
+      - "*.md"
+      - ".gitignore"
   workflow_dispatch:
 
 jobs:
@@ -23,20 +23,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Build Dependencies & Kernel Headers
+      - name: Install build dependencies and kernel headers
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential gcc make kmod curl patch git linux-headers-$(uname -r)
+          sudo apt-get install -y \
+            build-essential gcc make kmod curl patch git \
+            "linux-headers-$(uname -r)"
 
-      - name: Download & Extract NVIDIA v470 Driver
+      - name: Download and extract NVIDIA v470 driver
         run: |
           DRIVERVERSION="470.256.02"
           DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
           DRIVERFILE="${DRIVERNAME}.run"
 
-          echo "Downloading NVIDIA driver version ${DRIVERVERSION}..."
-          curl -f -sSL "https://us.download.nvidia.com/XFree86/Linux-x86_64/${DRIVERVERSION}/${DRIVERFILE}" -o "${DRIVERFILE}"
-          
+          echo "Downloading NVIDIA driver ${DRIVERVERSION}..."
+          curl -f -sSL \
+            "https://us.download.nvidia.com/XFree86/Linux-x86_64/${DRIVERVERSION}/${DRIVERFILE}" \
+            -o "${DRIVERFILE}"
+
           echo "Extracting driver package..."
           sh "${DRIVERFILE}" --extract-only
           rm "${DRIVERFILE}"
@@ -48,117 +52,107 @@ jobs:
           git add .
           git commit -m "Initial extracted source"
 
-      - name: Apply Custom Repository Patches
+      - name: Apply custom repository patches
         run: |
           DRIVERVERSION="470.256.02"
           DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
-          
+
           if [ -d "patches" ]; then
-            cd "${DRIVERNAME}"
-            for p in ../patches/*.patch; do
-              if [ -f "$p" ]; then
-                echo "Applying repository patch: $p"
-                patch -p1 < "$p" || true
-              fi
+            shopt -s nullglob
+            for p in patches/*.patch; do
+              echo "Applying repository patch: ${p}"
+              (
+                cd "${DRIVERNAME}"
+                patch --batch --forward -p1 < "../${p}"
+              )
             done
           fi
 
-      - name: Patch Kbuild Header Include Flags
+      - name: Prepare Kbuild include paths
         run: |
           DRIVERVERSION="470.256.02"
           DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
           cd "${DRIVERNAME}"
 
-          # Inject explicit include flags into Kbuild files using Kbuild $(src) macro
-          find kernel/ -name "Kbuild" -o -name "Kbuild.nvidia" | while read -r kfile; do
-            sed -i '1i ccflags-y += -I$(src) -I$(src)/nvidia -I$(src)/nvidia-modeset -I$(src)/../common/inc -I$(src)/common/inc' "$kfile"
-          done
+          GCC_INCLUDE_DIR="$(gcc -print-file-name=include)"
+          if [ ! -f "${GCC_INCLUDE_DIR}/stdarg.h" ] ||
+             [ ! -f "${GCC_INCLUDE_DIR}/stddef.h" ]; then
+            echo "GCC builtin headers not found in ${GCC_INCLUDE_DIR}" >&2
+            exit 1
+          fi
+          echo "Using GCC builtin headers from ${GCC_INCLUDE_DIR}"
 
-      - name: Compile Kernel Module with Auto-Patching
+          # Find both Kbuild filenames. Parentheses keep the name alternatives
+          # grouped so -type f applies to both.
+          find kernel/ -type f \
+            \( -name "Kbuild" -o -name "Kbuild.nvidia" \) -print0 |
+            while IFS= read -r -d '' kfile; do
+              if ! grep -Fq "ccflags-y += -isystem ${GCC_INCLUDE_DIR}" "$kfile"; then
+                sed -i "1i ccflags-y += -isystem ${GCC_INCLUDE_DIR}" "$kfile"
+              fi
+
+              if ! grep -Fq 'ccflags-y += -I$(src)' "$kfile"; then
+                sed -i '1i ccflags-y += -I$(src) -I$(src)/nvidia -I$(src)/nvidia-modeset -I$(src)/../common/inc -I$(src)/common/inc' "$kfile"
+              fi
+            done
+
+      - name: Compile kernel module
         run: |
           DRIVERVERSION="470.256.02"
           DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
           cd "${DRIVERNAME}/kernel"
 
-          MAX_ATTEMPTS=10
-          ATTEMPT=1
-          SUCCESS=0
+          echo "Building against kernel $(uname -r)"
+          echo "Compiler: $(gcc --version | head -n 1)"
 
-          echo "Starting module compilation with automated error fixing..."
+          if BUILD_LOG=$(make -j"$(nproc)" modules "KERNEL_UNAME=$(uname -r)" 2>&1); then
+            echo "$BUILD_LOG"
+            echo "Build succeeded."
+          else
+            BUILD_EXIT=$?
+            echo "Kernel module build failed (exit ${BUILD_EXIT}). Full build log:" >&2
+            echo "$BUILD_LOG" >&2
 
-          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
-            echo "--- Build Attempt $ATTEMPT / $MAX_ATTEMPTS ---"
-            
-            BUILD_LOG=$(make -j$(nproc) modules KERNEL_UNAME=$(uname -r) 2>&1) && BUILD_EXIT=$? || BUILD_EXIT=$?
-
-            if [ $BUILD_EXIT -eq 0 ]; then
-              echo "Build succeeded!"
-              SUCCESS=1
-              break
+            if echo "$BUILD_LOG" |
+              grep -Eq 'fatal error: (stdarg\.h|stddef\.h): No such file or directory'; then
+              echo "The compiler builtin include path is still missing from the effective Kbuild flags." >&2
             fi
 
-            echo "Build failed. Analyzing logs for common kernel breakage patterns..."
-
-            FIXED=0
-
-            # Pattern 1: acpi_walk_namespace conftest failure
-            if echo "$BUILD_LOG" | grep -q "acpi_walk_namespace() conftest failed"; then
-              echo "Fixing: Patching acpi_walk_namespace conftest test..."
-              sed -i 's/acpi_walk_namespace()/acpi_walk_namespace(0, NULL, 0, NULL, NULL, NULL, NULL)/g' conftest.sh
-              FIXED=1
+            if echo "$BUILD_LOG" |
+              grep -Eq 'acpi_walk_namespace.*conftest failed'; then
+              echo "The ACPI conftest failed. Inspect its generated test and the target kernel API before applying a compatibility patch." >&2
             fi
 
-            # Pattern 2: Missing member 'date' in struct drm_driver
-            if echo "$BUILD_LOG" | grep -q "has no member named 'date'"; then
-              echo "Fixing: Commenting out removed 'date' member in drm struct..."
-              grep -rl "\.date[[:space:]]*=" . | xargs -r sed -i 's/\(\s*\.date\s*=.*\)/\/\/\1/'
-              FIXED=1
+            if echo "$BUILD_LOG" |
+              grep -Eq "has no member named 'date'|drm_pci_init"; then
+              echo "The driver has a DRM API compatibility error. Use a targeted compatibility patch; do not delete the failing API reference blindly." >&2
             fi
 
-            # Pattern 3: MODULE_LICENSE macro adjustments
-            if echo "$BUILD_LOG" | grep -q "MODULE_LICENSE"; then
-              echo "Fixing: Ensuring proper MODULE_LICENSE placement..."
-              grep -rl "MODULE_LICENSE" . | xargs -r sed -i 's/MODULE_LICENSE("GPL v2");/MODULE_LICENSE("GPL");/'
-              FIXED=1
-            fi
-
-            # Pattern 4: drm_pci_init removal in modern DRM subsystem
-            if echo "$BUILD_LOG" | grep -q "drm_pci_init"; then
-              echo "Fixing: Patching removed drm_pci_init function calls..."
-              grep -rl "drm_pci_init" . | xargs -r sed -i 's/drm_pci_init/\/\/ drm_pci_init/'
-              FIXED=1
-            fi
-
-            if [ $FIXED -eq 0 ]; then
-              echo "Could not automatically resolve errors. Full build log below:"
-              echo "$BUILD_LOG"
-              exit 1
-            fi
-
-            ATTEMPT=$((ATTEMPT + 1))
-          done
-
-          if [ $SUCCESS -ne 1 ]; then
-            echo "Failed to compile driver module after $MAX_ATTEMPTS attempts."
-            exit 1
+            exit "$BUILD_EXIT"
           fi
 
-      - name: Generate Unified Patch File
+      - name: Generate unified patch file
         if: always()
         run: |
           DRIVERVERSION="470.256.02"
           DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
-          cd "${DRIVERNAME}"
 
+          if [ ! -d "${DRIVERNAME}/.git" ]; then
+            echo "Driver source or Git baseline is unavailable; skipping patch generation."
+            exit 0
+          fi
+
+          cd "${DRIVERNAME}"
           if git status --porcelain | grep -q .; then
-            echo "Changes detected! Generating nvidia-v470-kernel.patch..."
+            echo "Changes detected; generating nvidia-v470-kernel.patch..."
             git diff > ../nvidia-v470-kernel.patch
           else
-            echo "No changes made, generating empty patch baseline."
+            echo "No changes made; generating empty patch."
             touch ../nvidia-v470-kernel.patch
           fi
 
-      - name: Upload Auto-Generated Patch Artifact
+      - name: Upload generated patch artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: nvidia-v470-auto-patch
