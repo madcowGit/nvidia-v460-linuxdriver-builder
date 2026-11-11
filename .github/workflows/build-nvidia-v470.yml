@@ -63,16 +63,16 @@ jobs:
             done
           fi
 
-      - name: Prepare Header Includes & Kbuild Paths
+      - name: Patch Kbuild Header Include Flags
         run: |
           DRIVERVERSION="470.256.02"
           DRIVERNAME="NVIDIA-Linux-x86_64-${DRIVERVERSION}"
-          cd "${DRIVERNAME}/kernel"
+          cd "${DRIVERNAME}"
 
-          # Populate Kbuild files with include directory paths so nested modules resolve all headers
-          INCLUDES="-I$(pwd) -I$(pwd)/nvidia -I$(pwd)/nvidia-modeset -I$(pwd)/../common/inc"
-          
-          find . -name "Kbuild" -o -name "Makefile" | xargs -r sed -i "1i ccflags-y += ${INCLUDES}"
+          # Inject explicit include flags into Kbuild files using Kbuild $(src) macro
+          find kernel/ -name "Kbuild" -o -name "Kbuild.nvidia" | while read -r kfile; do
+            sed -i '1i ccflags-y += -I$(src) -I$(src)/nvidia -I$(src)/nvidia-modeset -I$(src)/../common/inc -I$(src)/common/inc' "$kfile"
+          done
 
       - name: Compile Kernel Module with Auto-Patching
         run: |
